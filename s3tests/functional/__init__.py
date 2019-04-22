@@ -1,3 +1,4 @@
+# -*- coding=utf-8
 from __future__ import print_function
 import sys
 import ConfigParser
@@ -8,6 +9,7 @@ import itertools
 import os
 import random
 import string
+import subprocess
 from httplib import HTTPConnection, HTTPSConnection
 from urlparse import urlparse
 
@@ -19,6 +21,10 @@ targets = bunch.Bunch()
 
 # this will be assigned by setup()
 prefix = None
+cos_bucket=None
+cos_appid = None
+cos_alt_appid = None
+
 
 calling_formats = dict(
     ordinary=boto.s3.connection.OrdinaryCallingFormat(),
@@ -26,9 +32,27 @@ calling_formats = dict(
     vhost=boto.s3.connection.VHostCallingFormat(),
     )
 
+def get_all_buckets():
+    out = subprocess.check_output(['/data/home/richardyao/workspace/github/s3-tests/get_all_buckets.sh'])
+    buckets = out.splitlines()
+    return buckets
+
 def get_prefix():
     assert prefix is not None
     return prefix
+
+def get_cos_bucket():
+    assert cos_bucket is not None
+    return cos_bucket
+
+def get_cos_appid():
+    assert cos_appid is not None
+    return cos_appid
+
+def get_cos_alt_appid():
+    assert cos_alt_appid is not None
+    return cos_alt_appid
+
 
 def is_slow_backend():
     return slow_backend
@@ -40,6 +64,7 @@ def choose_bucket_prefix(template, max_len=30):
     Use template and feed it more and more random filler, until it's
     as long as possible but still below max_len.
     """
+    print("enter choose_bucket_prefix template {template}".format(template=template))
     rand = ''.join(
         random.choice(string.ascii_lowercase + string.digits)
         for c in range(255)
@@ -64,25 +89,37 @@ def nuke_prefixed_buckets_on_conn(prefix, name, conn):
         prefix=prefix,
         ))
 
-    for bucket in conn.get_all_buckets():
+    for bucket in get_all_buckets():
         print('prefix=',prefix)
-        if bucket.name.startswith(prefix):
+        if name == 'main':
             print('Cleaning bucket {bucket}'.format(bucket=bucket))
+            try:
+                bucket = conn.get_bucket(bucket)
+            except boto.exception.S3ResponseError as e:
+                 # 兼容一下控制台和架平底层不同步的问题
+                 # 控制台存在架平不存在时,直接去删除
+                 if e.status == 404:
+                     subprocess.call(['/usr/local/services/s3-tests/s3-tests/nuke.sh'])
+                     continue
+                 else:
+                     raise e
             success = False
+            version_flag = False
+            versioning_result = bucket.get_versioning_status()
+            if 'Versioning' in versioning_result:
+                version_flag = True
             for i in xrange(2):
                 try:
-                    try:
+                    for mp in bucket.get_all_multipart_uploads():
+                        mp.cancel_upload()
+                    if version_flag:
                         iterator = iter(bucket.list_versions())
                         # peek into iterator to issue list operation
                         try:
                             keys = itertools.chain([next(iterator)], iterator)
                         except StopIteration:
                             keys = []  # empty iterator
-                    except boto.exception.S3ResponseError as e:
-                        # some S3 implementations do not support object
-                        # versioning - fall back to listing without versions
-                        if e.error_code != 'NotImplemented':
-                            raise e
+                    else:
                         keys = bucket.list();
                     for key in keys:
                         print('Cleaning bucket {bucket} key {key}'.format(
@@ -90,7 +127,10 @@ def nuke_prefixed_buckets_on_conn(prefix, name, conn):
                             key=key,
                             ))
                         # key.set_canned_acl('private')
-                        bucket.delete_key(key.name, version_id = key.version_id)
+                        if version_flag:
+                            bucket.delete_key(key.name, version_id = key.version_id)
+                        else:
+                            bucket.delete_key(key.name)
                     bucket.delete()
                     success = True
                 except boto.exception.S3ResponseError as e:
@@ -108,23 +148,24 @@ def nuke_prefixed_buckets_on_conn(prefix, name, conn):
 
 
 def nuke_prefixed_buckets(prefix):
+    print("enter nuke_prefixed_buckets prefix {prefix}".format(prefix=prefix))
     # If no regions are specified, use the simple method
     if targets.main.master == None:
         for name, conn in s3.items():
             print('Deleting buckets on {name}'.format(name=name))
             nuke_prefixed_buckets_on_conn(prefix, name, conn)
-    else: 
-		    # First, delete all buckets on the master connection 
+    else:
+		    # First, delete all buckets on the master connection
 		    for name, conn in s3.items():
 		        if conn == targets.main.master.connection:
 		            print('Deleting buckets on {name} (master)'.format(name=name))
 		            nuke_prefixed_buckets_on_conn(prefix, name, conn)
-		
+
 		    # Then sync to propagate deletes to secondaries
 		    region_sync_meta(targets.main, targets.main.master.connection)
 		    print('region-sync in nuke_prefixed_buckets')
-		
-		    # Now delete remaining buckets on any other connection 
+
+		    # Now delete remaining buckets on any other connection
 		    for name, conn in s3.items():
 		        if conn != targets.main.master.connection:
 		            print('Deleting buckets on {name} (non-master)'.format(name=name))
@@ -253,6 +294,7 @@ class RegionsConn:
 _multiprocess_can_split_ = True
 
 def setup():
+    print("enter setup\n")
 
     cfg = ConfigParser.RawConfigParser()
     try:
@@ -268,12 +310,43 @@ def setup():
     global prefix
     global targets
     global slow_backend
+    global cos_bucket
+    global cos_appid
+    global cos_alt_appid
 
     try:
         template = cfg.get('fixtures', 'bucket prefix')
     except (ConfigParser.NoSectionError, ConfigParser.NoOptionError):
         template = 'test-{random}-'
     prefix = choose_bucket_prefix(template=template)
+
+
+    try:
+        template = cfg.get('fixtures', 'cos_bucket')
+    except (ConfigParser.NoSectionError, ConfigParser.NoOptionError):
+        template = 'test{random}'
+    cos_bucket = choose_bucket_prefix(template=template)
+
+    try:
+        cos_appid = cfg.get('fixtures', 'cos_appid')
+    except (ConfigParser.NoSectionError, ConfigParser.NoOptionError):
+        # length of random app id is 10
+        cos_appid = ''.join(
+            random.choice(string.digits)
+            for c in range(10)
+        )
+
+    try:
+        cos_alt_appid = cfg.get('s3 alt', 'cos_alt_appid')
+    except (ConfigParser.NoSectionError, ConfigParser.NoOptionError):
+        # length of random app id is 10
+        cos_alt_appid = ''.join(
+            random.choice(string.digits)
+            for c in range(10)
+        )
+
+
+    print("111")
 
     try:
         slow_backend = cfg.getboolean('fixtures', 'slow backend')
@@ -288,6 +361,7 @@ def setup():
 
     s3.clear()
     config.clear()
+    print("222")
 
     for section in cfg.sections():
         try:
@@ -350,6 +424,7 @@ def setup():
                 targets[name].set_default(temp_targetConn)
 
         s3[name] = targets[name].default.connection
+    print("333")
 
     # WARNING! we actively delete all buckets we see with the prefix
     # we've chosen! Choose your prefix with care, and don't reuse
@@ -364,6 +439,7 @@ def setup():
 def teardown():
     # remove our buckets here also, to avoid littering
     nuke_prefixed_buckets(prefix=prefix)
+    print("enter teardown")
 
 
 bucket_counter = itertools.count(1)
@@ -377,9 +453,38 @@ def get_new_bucket_name():
     bucket by this name happens to exist, it's ok if tests give
     false negatives.
     """
-    name = '{prefix}{num}'.format(
+    print("enter get_new_bucket_name")
+    name = '{num}{prefix}'.format(
         prefix=prefix,
         num=next(bucket_counter),
+        )
+    return name
+
+def get_new_bucket_name_cos_style(cos_bucket=None, cos_appid=None, prefix='', suffix='', is_use_counter=False):
+    """
+    Get a bucket name that probably does not exist.
+
+    We make every attempt to use a unique random prefix, so if a
+    bucket by this name happens to exist, it's ok if tests give
+    false negatives.
+    """
+    print("enter get_new_bucket_name_cos_style")
+    if cos_bucket is None:
+        cos_bucket = get_cos_bucket()
+
+    if cos_appid is None:
+        cos_appid = get_cos_appid()
+
+    num = ''
+    if is_use_counter:
+        num=next(bucket_counter)
+    
+    name = '{prefix}{num}{bucket}{suffix}-{appid}'.format(
+        bucket=cos_bucket,
+        appid=cos_appid,
+        prefix=prefix,
+        suffix=suffix,
+        num=num,
         )
     return name
 
@@ -402,7 +507,7 @@ def get_new_bucket(target=None, name=None, headers=None):
     bucket = connection.create_bucket(name, location=target.conf.api_name, headers=headers)
     return bucket
 
-def _make_request(method, bucket, key, body=None, authenticated=False, response_headers=None, request_headers=None, expires_in=100000, path_style=True, timeout=None):
+def _make_request(method, bucket, key, body=None, authenticated=False, response_headers=None, request_headers=None, expires_in=100000, path_style=False, timeout=None):
     """
     issue a request for a specified method, on a specified <bucket,key>,
     with a specified (optional) body (encrypted per the connection), and
@@ -414,6 +519,8 @@ def _make_request(method, bucket, key, body=None, authenticated=False, response_
     provided by later methods.
     """
     if not path_style:
+        if not request_headers:
+            request_headers = dict()
         conn = bucket.connection
         request_headers['Host'] = conn.calling_format.build_host(conn.server_name(), bucket.name)
 
@@ -440,10 +547,13 @@ def _make_request(method, bucket, key, body=None, authenticated=False, response_
             raise RuntimeError('Unable to find bucket name')
         if path_style:
             path = '/{bucket}'.format(bucket=bucketobj.name) + path
+    if not path_style:
+        host = request_headers['Host']
+    else:
+        host = s3.main.host
+    return _make_raw_request(host=host, port=s3.main.port, method=method, path=path, body=body, request_headers=request_headers, secure=s3.main.is_secure, timeout=timeout)
 
-    return _make_raw_request(host=s3.main.host, port=s3.main.port, method=method, path=path, body=body, request_headers=request_headers, secure=s3.main.is_secure, timeout=timeout)
-
-def _make_bucket_request(method, bucket, body=None, authenticated=False, response_headers=None, request_headers=None, expires_in=100000, path_style=True, timeout=None):
+def _make_bucket_request(method, bucket, body=None, authenticated=False, response_headers=None, request_headers=None, expires_in=100000, path_style=False, timeout=None):
     """
     issue a request for a specified method, on a specified <bucket>,
     with a specified (optional) body (encrypted per the connection), and

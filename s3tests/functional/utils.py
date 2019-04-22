@@ -1,6 +1,7 @@
 import random
 import requests
 import string
+import socket
 import time
 
 from nose.tools import eq_ as eq
@@ -19,6 +20,17 @@ def assert_raises(excClass, callableObj, *args, **kwargs):
         else:
             excName = str(excClass)
         raise AssertionError("%s not raised" % excName)
+
+def assert_raises_gaierror(callableObj, *args, **kwargs):
+    """
+    Like unittest.TestCase.assertRaises, but returns the exception.
+    """
+    try:
+        callableObj(*args, **kwargs)
+    except socket.error, e:
+        return e
+    else:
+        raise AssertionError("gaierror not raised")
 
 def generate_random(size, part_size=5*1024*1024):
     """

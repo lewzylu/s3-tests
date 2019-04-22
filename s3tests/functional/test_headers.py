@@ -1,3 +1,5 @@
+# -*- coding:utf-8 -*-
+
 from cStringIO import StringIO
 import boto.connection
 import boto.exception
@@ -185,6 +187,7 @@ def tag(*tags):
 @attr(assertion='fails 400')
 @nose.with_setup(teardown=_clear_custom_headers)
 def test_object_create_bad_md5_invalid_short():
+    print("enter test_object_create_bad_md5_invalid_short")
     key = _setup_bad_object({'Content-MD5':'YWJyYWNhZGFicmE='})
 
     e = assert_raises(boto.exception.S3ResponseError, key.set_contents_from_string, 'bar')
@@ -232,9 +235,9 @@ def test_object_create_bad_md5_unreadable():
     key = _setup_bad_object({'Content-MD5': '\x07'})
 
     e = assert_raises(boto.exception.S3ResponseError, key.set_contents_from_string, 'bar')
-    eq(e.status, 403)
-    eq(e.reason, 'Forbidden')
-    assert e.error_code in ('AccessDenied', 'SignatureDoesNotMatch')
+    eq(e.status, 400)
+    eq(e.reason.lower(), 'bad request')
+    eq(e.error_code, 'InvalidDigest')
 
 
 @tag('auth_common')
@@ -371,6 +374,7 @@ def test_object_create_bad_contentlength_unreadable():
 @nose.with_setup(teardown=_clear_custom_headers)
 @attr('fails_on_rgw')
 def test_object_create_bad_contentlength_mismatch_above():
+    raise SkipTest # 需要研究底层代码
     content = 'bar'
     length = len(content) + 1
 
@@ -409,6 +413,7 @@ def test_object_create_bad_contenttype_empty():
     key.set_contents_from_string('bar')
 
 
+
 @tag('auth_common')
 @attr(resource='object')
 @attr(method='put')
@@ -432,9 +437,9 @@ def test_object_create_bad_contenttype_unreadable():
     key = _setup_bad_object({'Content-Type': '\x08'})
 
     e = assert_raises(boto.exception.S3ResponseError, key.set_contents_from_string, 'bar')
-    eq(e.status, 403)
-    eq(e.reason, 'Forbidden')
-    assert e.error_code in ('AccessDenied', 'SignatureDoesNotMatch')
+    eq(e.status, 400)
+    eq(e.reason.lower(), 'bad request')
+    eq(e.error_code, 'InvalidArgument')
 
 
 # the teardown is really messed up here. check it out
@@ -709,6 +714,7 @@ def test_object_create_bad_md5_invalid_garbage_aws2():
 @attr(assertion='fails 400')
 @nose.with_setup(teardown=_clear_custom_headers)
 def test_object_create_bad_contentlength_mismatch_below_aws2():
+    raise SkipTest # 实测S3返回200
     check_aws2_support()
     content = 'bar'
     length = len(content) - 1
@@ -748,6 +754,20 @@ def test_object_create_bad_authorization_invalid_aws2():
     eq(e.reason.lower(), 'bad request') # some proxies vary the case
     eq(e.error_code, 'InvalidArgument')
 
+
+@tag('auth_aws2')
+@nose.with_setup(teardown=_clear_custom_headers)
+@attr(resource='object')
+@attr(method='put')
+@attr(operation='create w/invalid authorization, ')
+@attr(assertion='fails 400, and StringToSign in the error response')
+def test_object_create_bad_authorization_invalid_aws2_string_to_sign_on_error():
+    check_aws2_support()
+    key = _setup_bad_object({'Authorization': 'AWS AKID15IsskiBQKTZbAo6WhgcBqVls9SmuG00:GPm3l6Ox8Vp2xVDV0PsoVRiOMlw='})
+    e = assert_raises(boto.exception.S3ResponseError, key.set_contents_from_string, 'bar')
+    eq(e.status, 403)
+    string_to_sign = re.search(r'<StringToSign>.*', e.body.encode('utf-8')).group(0)
+    assert string_to_sign is not None
 
 @tag('auth_aws2')
 @attr(resource='object')
