@@ -763,7 +763,7 @@ def test_object_create_bad_authorization_invalid_aws2():
 @attr(assertion='fails 400, and StringToSign in the error response')
 def test_object_create_bad_authorization_invalid_aws2_string_to_sign_on_error():
     check_aws2_support()
-    key = _setup_bad_object({'Authorization': 'AWS AKID15IsskiBQKTZbAo6WhgcBqVls9SmuG00:GPm3l6Ox8Vp2xVDV0PsoVRiOMlw='})
+    key = _setup_bad_object({'Authorization': 'AWS AKIDgHwGiHZzjrBNTNoh5tqywmRvbAnQBgks:GPm3l6Ox8Vp2xVDV0PsoVRiOMlw='})
     e = assert_raises(boto.exception.S3ResponseError, key.set_contents_from_string, 'bar')
     eq(e.status, 403)
     string_to_sign = re.search(r'<StringToSign>.*', e.body.encode('utf-8')).group(0)

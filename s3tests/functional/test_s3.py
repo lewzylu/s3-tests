@@ -3137,7 +3137,7 @@ def test_object_raw_get_bucket_gone():
 
     time.sleep(ACL_SLEEP)
     res = _make_request('GET', bucket, key)
-    eq(res.status, 403) # aws return 404, cos return 403(safer)
+    eq(res.status, 404) # aws return 404, cos return 403(safer)
     eq(res.reason, 'Forbidden')
 
 
@@ -3955,7 +3955,7 @@ def test_bucket_acl_canned():
                 ),
             ],
         )
-
+    time.sleep(20)
     # Then back to private.
     bucket.set_acl('private')
     policy = bucket.get_acl()
@@ -4210,6 +4210,7 @@ def test_object_acl_canned_authenticatedread():
     key.set_contents_from_string('bar')
     key.set_acl('authenticated-read')
     policy = key.get_acl()
+    
     print repr(policy)
     check_grants(
         policy.acl.grants,
@@ -4239,21 +4240,20 @@ def test_object_acl_canned_authenticatedread():
 @attr(operation='acl bucket-owner-read')
 @attr(assertion='read back expected values')
 def test_object_acl_canned_bucketownerread():
-    bucket = get_new_bucket(targets.main.default)
+    bucket = get_new_bucket()
     bucket.set_acl('public-read-write')
 
     # 授权后需要等60s才能正确鉴权
     wait_for_acl_valid(200, bucket)
     key = s3.alt.get_bucket(bucket.name).new_key('foo')
     key.set_contents_from_string('bar')
-
     bucket_policy = bucket.get_acl()
     bucket_owner_id = bucket_policy.owner.id
     bucket_owner_display = bucket_policy.owner.display_name
 
     key.set_acl('bucket-owner-read')
     #TODO(jimmyyan):
-    # CAN不支持object的owner的概念，AWS支持，需要CAM对齐IAM
+    # CAM不支持object的owner的概念，AWS支持，需要CAM对齐IAM
     # bucketownerfullcontrol 同样
     #policy = key.get_acl()
     #print repr(policy)
@@ -4389,6 +4389,7 @@ def _build_bucket_acl_xml(permission, bucket=None):
     if bucket is None:
         bucket = get_new_bucket()
     bucket.set_xml_acl(XML)
+    time.sleep(10)
     policy = bucket.get_acl()
     print repr(policy)
     check_grants(
@@ -4777,8 +4778,7 @@ def test_bucket_acl_no_grants():
     # can write acl
     bucket.set_acl('private')
 
-def _get_acl_header(user=None, perms=None):
-    all_headers = ["read", "write", "read-acp", "write-acp", "full-control"]
+def _get_acl_header(user=None, perms=None, all_headers=["read", "write", "read-acp", "write-acp", "full-control"]):
     headers = {}
 
     if user == None:
@@ -4802,8 +4802,10 @@ def _get_acl_header(user=None, perms=None):
 @attr('fails_on_aws') #  <Error><Code>InvalidArgument</Code><Message>Invalid id</Message><ArgumentName>CanonicalUser/ID</ArgumentName><ArgumentValue>${ALTUSER}</ArgumentValue>
 def test_object_header_acl_grants():
     bucket = get_new_bucket()
-    headers = _get_acl_header()
+    headers = _get_acl_header(all_headers=["read", "read-acp", "write-acp", "full-control"])
     k = bucket.new_key("foo_key")
+    print headers
+    print "11111111111111111"
     k.set_contents_from_string("bar", headers=headers)
 
     policy = k.get_acl()
@@ -4818,16 +4820,16 @@ def test_object_header_acl_grants():
                 email_address=None,
                 type='CanonicalUser',
                 ),
+#            dict(
+#                permission='WRITE',
+#                id=config.alt.user_id,
+#                display_name=config.alt.display_name,
+#                uri=None,
+#                email_address=None,
+#                type='CanonicalUser',
+#                ),
             dict(
-                permission='WRITE',
-                id=config.alt.user_id,
-                display_name=config.alt.display_name,
-                uri=None,
-                email_address=None,
-                type='CanonicalUser',
-                ),
-            dict(
-                permission='FULL_CONTROL',
+                permission='READ_ACP',
                 id=config.alt.user_id,
                 display_name=config.alt.display_name,
                 uri=None,
@@ -4843,13 +4845,14 @@ def test_object_header_acl_grants():
                 type='CanonicalUser',
                 ),
             dict(
-                permission='READ_ACP',
+                permission='FULL_CONTROL',
                 id=config.alt.user_id,
                 display_name=config.alt.display_name,
                 uri=None,
                 email_address=None,
                 type='CanonicalUser',
                 ),
+
             ],
         )
 
