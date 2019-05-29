@@ -12,3 +12,7 @@
 /virtualenv
 
 config.yaml
+/debug
+/daily
+/result
+

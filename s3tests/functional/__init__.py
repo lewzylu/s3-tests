@@ -33,7 +33,7 @@ calling_formats = dict(
     )
 
 def get_all_buckets():
-    out = subprocess.check_output(['/data/home/richardyao/workspace/github/s3-tests/get_all_buckets.sh'])
+    out = subprocess.check_output(['/data/lewzylu/s3-tests/get_all_buckets.sh'])
     buckets = out.splitlines()
     return buckets
 
@@ -346,7 +346,6 @@ def setup():
         )
 
 
-    print("111")
 
     try:
         slow_backend = cfg.getboolean('fixtures', 'slow backend')
@@ -361,7 +360,6 @@ def setup():
 
     s3.clear()
     config.clear()
-    print("222")
 
     for section in cfg.sections():
         try:

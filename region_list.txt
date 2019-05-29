@@ -1,0 +1,4 @@
+ap-guangzhou
+ap-beijing
+ap-beijing-1
+ap-chengdu
